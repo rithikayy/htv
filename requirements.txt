@@ -5,3 +5,4 @@ opencv-python
 flask
 flask-socketio
 flask-cors
+azure-cognitiveservices-speech
