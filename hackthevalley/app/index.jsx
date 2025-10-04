@@ -18,32 +18,20 @@ export default function HomeScreen() {
     <View
       style={[styles.container, highContrast && styles.highContrastBackground]}
     >
-      <Text
-        style={[
-          styles.text,
-          highContrast && styles.highContrastText,
-          dyslexiaFont && { fontFamily: "DyslexiaFont" },
-        ]}
-      >
-        Accessibility Demo
-      </Text>
+      <View style={styles.testContainer}>
+        <View style={styles.toggleRow}>
+          <Text style={styles.label}>High Contrast</Text>
+          <View style={styles.switchContainer}>
+            <Switch value={highContrast} onValueChange={setHighContrast} />
+          </View>
+        </View>
 
-      <View style={styles.toggleRow}>
-        <Text
-          style={[styles.text, dyslexiaFont && { fontFamily: "DyslexiaFont" }]}
-        >
-          High Contrast
-        </Text>
-        <Switch value={highContrast} onValueChange={setHighContrast} />
-      </View>
-
-      <View style={styles.toggleRow}>
-        <Text
-          style={[styles.text, dyslexiaFont && { fontFamily: "DyslexiaFont" }]}
-        >
-          Dyslexia Font
-        </Text>
-        <Switch value={dyslexiaFont} onValueChange={setDyslexiaFont} />
+        <View style={styles.toggleRow}>
+          <Text style={styles.label}>Dyslexia Font</Text>
+          <View style={styles.switchContainer}>
+            <Switch value={dyslexiaFont} onValueChange={setDyslexiaFont} />
+          </View>
+        </View>
       </View>
     </View>
   );
@@ -52,10 +40,16 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: "center",
+    justifyContent: "flex-end",
     alignItems: "center",
     backgroundColor: "#f5f5f5",
     padding: 20,
+  },
+  testContainer: {
+    flexDirection: "row",
+  },
+  switchContainer: {
+    marginRight: 10,
   },
   text: {
     fontSize: 20,
@@ -63,10 +57,10 @@ const styles = StyleSheet.create({
     color: "#333",
   },
   highContrastBackground: {
-    backgroundColor: "#000",
+    backgroundColor: "#fff",
   },
   highContrastText: {
-    color: "#FFD700",
+    color: "#000",
   },
   toggleRow: {
     flexDirection: "row",
@@ -75,7 +69,7 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 18,
-    marginRight: 10,
+    marginRight: 5,
     color: "#333",
   },
 });
