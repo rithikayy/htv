@@ -1,6 +1,6 @@
 google-genai
 Pillow
-numpy 
+numpy
 opencv-python
 flask
 flask-socketio
