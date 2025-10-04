@@ -6,6 +6,7 @@ import cv2
 import os
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
+from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 import base64
 import io
@@ -20,7 +21,10 @@ client = genai.Client(api_key=api_key)
 prompt = "Detect all of the prominent items in the image. The box_2d should be [ymin, xmin, ymax, xmax] normalized to 0-1000."
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Initialize SocketIO with CORS support
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 @app.route('/detect-objects', methods=['POST'])
 def detect_objects():
