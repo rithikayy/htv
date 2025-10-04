@@ -1,66 +1,82 @@
-import AppLoading from "expo-app-loading";
-import { useFonts } from "expo-font";
-import { useContext } from "react";
-import { StyleSheet, Switch, Text, View } from "react-native";
+import React, { useContext } from "react";
+import { StyleSheet, Switch, Text, TouchableOpacity, View } from "react-native";
 import { ThemeContext } from "../contexts/ThemeContext";
+import { useRouter } from "expo-router";
 
-export default function HomeScreen() {
-  const { highContrast, setHighContrast, dyslexiaFont, setDyslexiaFont } =
-    useContext(ThemeContext);
+const HomeScreen = () => {
+  const router = useRouter();
+  const {
+    highContrast,
+    dyslexiaFont,
+    toggleHighContrast,
+    toggleDyslexiaFont,
+    themeStyles,
+  } = useContext(ThemeContext);
 
-  const [fontsLoaded] = useFonts({
-    DyslexiaFont: require("../assets/fonts/OpenDyslexic3-Regular.ttf"),
-  });
-
-  if (!fontsLoaded) return <AppLoading />;
+  const { colors, fontFamily } = themeStyles;
 
   return (
-    <View
-      style={[styles.container, highContrast && styles.highContrastBackground]}
-    >
-      <View style={styles.testContainer}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={styles.buttonContainer}>
+        <TouchableOpacity
+          onPress={() => router.push("/camera-page")}
+          style={[styles.button, { backgroundColor: colors.buttonBackground }]}
+        >
+          <Text
+            style={[
+              styles.buttonText,
+              { color: colors.buttonText, fontFamily },
+            ]}
+          >
+            Turn on camera
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.toggleContainer}>
         <View style={styles.toggleRow}>
-          <Text style={styles.label}>High Contrast</Text>
+          <Text style={[styles.label, { color: colors.text }]}>
+            High Contrast
+          </Text>
           <View style={styles.switchContainer}>
-            <Switch value={highContrast} onValueChange={setHighContrast} />
+            <Switch value={highContrast} onValueChange={toggleHighContrast} />
           </View>
         </View>
 
         <View style={styles.toggleRow}>
-          <Text style={styles.label}>Dyslexia Font</Text>
+          <Text style={[styles.label, { color: colors.text }]}>
+            Dyslexia Font
+          </Text>
           <View style={styles.switchContainer}>
-            <Switch value={dyslexiaFont} onValueChange={setDyslexiaFont} />
+            <Switch value={dyslexiaFont} onValueChange={toggleDyslexiaFont} />
           </View>
         </View>
       </View>
     </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: "flex-end",
+    justifyContent: "space-between",
+  },
+  buttonContainer: {
+    flex: 1,
+    justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#f5f5f5",
-    padding: 20,
   },
-  testContainer: {
-    flexDirection: "row",
+  button: {
+    paddingVertical: 12,
+    paddingHorizontal: 25,
+    borderRadius: 8,
   },
-  switchContainer: {
-    marginRight: 10,
-  },
-  text: {
+  buttonText: {
     fontSize: 20,
-    marginBottom: 30,
-    color: "#333",
   },
-  highContrastBackground: {
-    backgroundColor: "#fff",
-  },
-  highContrastText: {
-    color: "#000",
+  toggleContainer: {
+    flexDirection: "row",
+    padding: 20,
   },
   toggleRow: {
     flexDirection: "row",
@@ -69,7 +85,11 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 18,
+    marginRight: 10,
+  },
+  switchContainer: {
     marginRight: 5,
-    color: "#333",
   },
 });
+
+export default HomeScreen;
