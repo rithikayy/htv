@@ -111,8 +111,8 @@ if not capture.isOpened():
     raise Exception("Could not open webcam. Make sure your camera is connected.")
 
 # Set camera resolution
-capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+capture.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
 # API configuration
 config = types.GenerateContentConfig(
@@ -127,7 +127,7 @@ print("Press 'c' to clear detections")
 
 frame_count = 0
 auto_detect = False
-process_every_n_frames = 40  # Process every 40 frames (every 2 seconds at 20fps)
+process_every_n_frames = 20  # Process every 40 frames (every 2 seconds at 20fps)
 last_detections = []
 
 try:
