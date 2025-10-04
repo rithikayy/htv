@@ -1,3 +1,7 @@
 google-genai
 Pillow
 numpy 
+opencv-python
+flask
+flask-socketio
+flask-cors
