@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import os
 from dotenv import load_dotenv
+import threading
 
 # Load environment variables from .env file
 load_dotenv()
@@ -19,7 +20,7 @@ client = genai.Client(api_key=api_key)
 prompt = "Detect all of the prominent items in the image. The box_2d should be [ymin, xmin, ymax, xmax] normalized to 0-1000."
 
 # Try to find a working model
-MODELS_TO_TRY = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
+MODELS_TO_TRY = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp", "gemini-2.0-pro-exp", "gemini-2.5-pro"]
 ACTIVE_MODEL = None
 
 print("Testing available models...")
@@ -103,6 +104,98 @@ def estimate_object_distance(box, label):
     return distance
 
 
+# Thread-safe variables
+detections_lock = threading.Lock()
+last_detections = []
+processing = False
+frame_to_process = None
+frame_dimensions = None
+
+
+def process_frame_worker():
+    """Background worker thread that processes frames"""
+    global last_detections, processing, frame_to_process, frame_dimensions
+    
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json"
+    )
+    
+    while True:
+        # Wait for a frame to process
+        with detections_lock:
+            if frame_to_process is None:
+                processing = False
+        
+        if frame_to_process is None:
+            threading.Event().wait(0.1)  # Sleep briefly
+            continue
+        
+        try:
+            # Get frame and dimensions
+            with detections_lock:
+                frame = frame_to_process.copy()
+                width, height = frame_dimensions
+                frame_to_process = None
+            
+            # Convert BGR to RGB for Gemini API
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_frame)
+            
+            # Call Gemini API for object detection
+            print(f"Processing frame in background...")
+            response = client.models.generate_content(
+                model=ACTIVE_MODEL,
+                contents=[pil_image, prompt],
+                config=config
+            )
+            
+            # Parse bounding boxes
+            bounding_boxes = json.loads(response.text)
+            
+            # Convert normalized coordinates to absolute and estimate distance
+            new_detections = []
+            for bbox in bounding_boxes:
+                abs_y1 = int(bbox["box_2d"][0]/1000 * height)
+                abs_x1 = int(bbox["box_2d"][1]/1000 * width)
+                abs_y2 = int(bbox["box_2d"][2]/1000 * height)
+                abs_x2 = int(bbox["box_2d"][3]/1000 * width)
+                
+                label = bbox.get("label", "object")
+                box = {
+                    "x1": abs_x1,
+                    "y1": abs_y1,
+                    "x2": abs_x2,
+                    "y2": abs_y2
+                }
+                
+                # Estimate distance
+                distance_cm = estimate_object_distance(box, label)
+                
+                detection = {
+                    "coords": [abs_x1, abs_y1, abs_x2, abs_y2],
+                    "label": label,
+                    "distance_cm": distance_cm,
+                    "distance_m": round(distance_cm / 100, 2) if distance_cm else None
+                }
+                
+                new_detections.append(detection)
+            
+            # Update shared detections (thread-safe)
+            with detections_lock:
+                last_detections = new_detections
+            
+            print(f"Detected {len(new_detections)} objects:")
+            for det in new_detections:
+                if det['distance_m']:
+                    print(f"  - {det['label']}: {det['distance_m']}m")
+                else:
+                    print(f"  - {det['label']}: (distance unknown)")
+            
+        except Exception as e:
+            print(f"Error processing frame: {e}")
+            with detections_lock:
+                processing = False
+
 
 # Open webcam
 capture = cv2.VideoCapture(0)
@@ -111,13 +204,12 @@ if not capture.isOpened():
     raise Exception("Could not open webcam. Make sure your camera is connected.")
 
 # Set camera resolution
-capture.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-# API configuration
-config = types.GenerateContentConfig(
-    response_mime_type="application/json"
-)
+# Start background worker thread
+worker_thread = threading.Thread(target=process_frame_worker, daemon=True)
+worker_thread.start()
 
 print("\nStarting video detection with distance estimation...")
 print("Press 'q' to quit")
@@ -127,8 +219,7 @@ print("Press 'c' to clear detections")
 
 frame_count = 0
 auto_detect = False
-process_every_n_frames = 20  # Process every 40 frames (every 2 seconds at 20fps)
-last_detections = []
+process_every_n_frames = 40  # Process every 40 frames (every 2 seconds at 20fps)
 
 try:
     while True:
@@ -157,70 +248,24 @@ try:
             auto_detect = not auto_detect
             print(f"Auto-detection: {'ON' if auto_detect else 'OFF'}")
         elif key == ord('c'):
-            last_detections = []
+            with detections_lock:
+                last_detections = []
             print("Detections cleared")
         
-        # Process frame
+        # Send frame to worker thread if needed and not already processing
         if should_process:
-            try:
-                # Convert BGR to RGB for Gemini API
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(rgb_frame)
-                
-                # Get image dimensions
-                width, height = pil_image.size
-                
-                # Call Gemini API for object detection
-                print(f"Processing frame {frame_count}...")
-                response = client.models.generate_content(
-                    model=ACTIVE_MODEL,
-                    contents=[pil_image, prompt],
-                    config=config
-                )
-                
-                # Parse bounding boxes
-                bounding_boxes = json.loads(response.text)
-                
-                # Convert normalized coordinates to absolute and estimate distance
-                last_detections = []
-                for bbox in bounding_boxes:
-                    abs_y1 = int(bbox["box_2d"][0]/1000 * height)
-                    abs_x1 = int(bbox["box_2d"][1]/1000 * width)
-                    abs_y2 = int(bbox["box_2d"][2]/1000 * height)
-                    abs_x2 = int(bbox["box_2d"][3]/1000 * width)
-                    
-                    label = bbox.get("label", "object")
-                    box = {
-                        "x1": abs_x1,
-                        "y1": abs_y1,
-                        "x2": abs_x2,
-                        "y2": abs_y2
-                    }
-                    
-                    # Estimate distance
-                    distance_cm = estimate_object_distance(box, label)
-                    
-                    detection = {
-                        "coords": [abs_x1, abs_y1, abs_x2, abs_y2],
-                        "label": label,
-                        "distance_cm": distance_cm,
-                        "distance_m": round(distance_cm / 100, 2) if distance_cm else None
-                    }
-                    
-                    last_detections.append(detection)
-                
-                print(f"Detected {len(last_detections)} objects:")
-                for det in last_detections:
-                    if det['distance_m']:
-                        print(f"  - {det['label']}: {det['distance_m']}m")
-                    else:
-                        print(f"  - {det['label']}: (distance unknown)")
-                
-            except Exception as e:
-                print(f"Error processing frame: {e}")
+            with detections_lock:
+                if not processing:
+                    processing = True
+                    frame_to_process = frame.copy()
+                    frame_dimensions = (frame.shape[1], frame.shape[0])
+        
+        # Get current detections (thread-safe)
+        with detections_lock:
+            current_detections = last_detections.copy()
         
         # Draw bounding boxes and distance on display frame
-        for det in last_detections:
+        for det in current_detections:
             x1, y1, x2, y2 = det["coords"]
             label = det["label"]
             distance = det["distance_m"]
@@ -247,7 +292,11 @@ try:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
         
         # Display status bar
-        status_text = f"Auto: {'ON' if auto_detect else 'OFF'} | Frame: {frame_count} | Objects: {len(last_detections)}"
+        with detections_lock:
+            is_processing = processing
+        status_text = f"Auto: {'ON' if auto_detect else 'OFF'} | Frame: {frame_count} | Objects: {len(current_detections)}"
+        if is_processing:
+            status_text += " | PROCESSING..."
         cv2.putText(display_frame, status_text, (10, 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
