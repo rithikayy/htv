@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useRef } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -7,10 +7,17 @@ import {
   TouchableOpacity,
   Linking,
   Platform,
+  Alert,
 } from "react-native";
 import { ThemeContext } from "@/contexts/ThemeContext";
 import { CameraView, CameraType, useCameraPermissions } from "expo-camera";
 import * as ImageManipulator from "expo-image-manipulator";
+import io from "socket.io-client";
+
+// Configuration
+const BACKEND_URL = "ws://100.102.117.223:5000";
+const FRAME_CAPTURE_INTERVAL = 30; // Capture every 30th frame
+const CONNECTION_TIMEOUT = 5000; // 5 seconds
 
 export default function CameraPage() {
   const { themeStyles } = useContext(ThemeContext);
@@ -18,87 +25,147 @@ export default function CameraPage() {
   const [facing, setFacing] = React.useState("back");
   const [permission, requestPermission, getPermission] = useCameraPermissions();
   const [isCameraReady, setIsCameraReady] = React.useState(false);
+  const [boundingBoxes, setBoundingBoxes] = useState([]);
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState("Connecting...");
+  const [detectionCount, setDetectionCount] = useState(0);
+  const [lastProcessedTime, setLastProcessedTime] = useState(null);
+
   const cameraRef = useRef(null);
   const frameCountRef = useRef(0);
   const isCapturingRef = useRef(false);
+  const socketRef = useRef(null);
+  const processingRef = useRef(false);
 
-  // Hardcoded bounding boxes for testing
-  // TODO: Replace with actual data from backend API
-  // Format: { x, y, width, height, label, confidence }
-  // x, y, width, height are in percentage (0-1) relative to camera view
-  const boundingBoxes = [
-    {
-      x: 0.1,
-      y: 0.15,
-      width: 0.3,
-      height: 0.4,
-      label: "person",
-      confidence: 0.95,
-    },
-    {
-      x: 0.5,
-      y: 0.3,
-      width: 0.35,
-      height: 0.45,
-      label: "car",
-      confidence: 0.87,
-    },
-    {
-      x: 0.2,
-      y: 0.65,
-      width: 0.25,
-      height: 0.2,
-      label: "dog",
-      confidence: 0.92,
-    },
-  ];
-
-  // When backend is ready, use this instead:
-  // const [boundingBoxes, setBoundingBoxes] = React.useState([]);
-  // Then update with: setBoundingBoxes(dataFromBackend);
-
+  // Initialize WebSocket connection
   useEffect(() => {
-    if (permission?.granted && isCameraReady) {
-      console.log(
-        "Camera permission granted and camera ready, starting frame capture..."
-      );
+    console.log("Initializing WebSocket connection...");
+
+    // Create socket connection
+    socketRef.current = io(BACKEND_URL, {
+      transports: ["websocket"],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: CONNECTION_TIMEOUT,
+    });
+
+    // Connection event handlers
+    socketRef.current.on("connect", () => {
+      console.log("✓ Connected to backend WebSocket");
+      setIsConnected(true);
+      setConnectionStatus("Connected");
+    });
+
+    socketRef.current.on("disconnect", (reason) => {
+      console.log("✗ Disconnected from backend:", reason);
+      setIsConnected(false);
+      setConnectionStatus("Disconnected");
+      setBoundingBoxes([]); // Clear boxes when disconnected
+    });
+
+    socketRef.current.on("connect_error", (error) => {
+      console.error("Connection error:", error.message);
+      setConnectionStatus(`Connection error: ${error.message}`);
+
+      // Show alert on first connection failure
+      if (!isConnected) {
+        Alert.alert(
+          "Connection Error",
+          `Cannot connect to backend at ${BACKEND_URL}. Make sure:\n\n1. Backend is running (python app.py)\n2. IP address is correct\n3. Both devices are on same network`,
+          [{ text: "OK" }]
+        );
+      }
+    });
+
+    socketRef.current.on("connection_status", (data) => {
+      console.log("Connection status:", data);
+      setConnectionStatus(data.message || "Connected");
+    });
+
+    // Detection result handler
+    socketRef.current.on("detection_result", (data) => {
+      console.log(`Received ${data.count} detections from backend`);
+
+      if (data.success && data.detections) {
+        setBoundingBoxes(data.detections);
+        setDetectionCount(data.count);
+        setLastProcessedTime(new Date().toLocaleTimeString());
+      }
+
+      processingRef.current = false; // Allow next frame to be processed
+    });
+
+    // Error handler
+    socketRef.current.on("detection_error", (data) => {
+      console.error("Detection error from backend:", data.error);
+      processingRef.current = false; // Allow retry
+    });
+
+    // Cleanup on unmount
+    return () => {
+      console.log("Cleaning up WebSocket connection...");
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
+  }, []);
+
+  // Start/stop frame capture based on camera and connection status
+  useEffect(() => {
+    if (permission?.granted && isCameraReady && isConnected) {
+      console.log("Starting frame capture (camera ready and connected)...");
       startFrameCapture();
+    } else {
+      console.log("Stopping frame capture...");
+      isCapturingRef.current = false;
     }
 
     return () => {
-      // Cleanup on unmount
-      console.log("Stopping frame capture...");
       isCapturingRef.current = false;
     };
-  }, [permission, isCameraReady]);
+  }, [permission, isCameraReady, isConnected]);
 
   async function captureAndProcessFrame() {
-    if (!cameraRef.current || !isCapturingRef.current) {
-      console.log("Cannot capture: camera ref or capturing flag not ready");
+    if (
+      !cameraRef.current ||
+      !isCapturingRef.current ||
+      !socketRef.current ||
+      !isConnected
+    ) {
+      return;
+    }
+
+    // Skip if still processing previous frame
+    if (processingRef.current) {
+      console.log("Skipping frame - still processing previous");
       return;
     }
 
     try {
-      console.log("Capturing frame...");
+      processingRef.current = true;
+      console.log("Capturing frame for detection...");
+
       // Capture the frame
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.7,
+        quality: 0.5, // Lower quality for faster processing
         skipProcessing: true,
+        base64: true, // Get base64 directly
       });
 
-      console.log("Frame captured, processing...");
-      // Compress and resize the image
+      // Resize the image for faster transmission
       const manipulatedImage = await ImageManipulator.manipulateAsync(
         photo.uri,
-        [{ resize: { width: 320 } }], // Resize to 640px width, height auto-calculated
+        [{ resize: { width: 640 } }], // Larger size for better detection
         {
-          compress: 0.7, // 70% quality
+          compress: 0.7,
           format: ImageManipulator.SaveFormat.JPEG,
           base64: true,
         }
       );
 
-      // Prepare the payload that would be sent to backend
+      // Prepare payload
       const payload = {
         image: manipulatedImage.base64,
         width: manipulatedImage.width,
@@ -107,56 +174,47 @@ export default function CameraPage() {
         cameraFacing: facing,
       };
 
-      // Log the payload (would be sent to backend in production)
-      console.log("Frame captured and processed:", {
-        timestamp: payload.timestamp,
-        width: payload.width,
-        height: payload.height,
-        cameraFacing: payload.cameraFacing,
-        base64: payload.image,
-      });
-
-      // In production, you would send to backend here:
-      // await fetch('YOUR_BACKEND_URL/process-frame', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(payload)
-      // });
+      // Send to backend via WebSocket
+      console.log(
+        `Sending frame to backend (${(
+          manipulatedImage.base64.length / 1024
+        ).toFixed(1)}KB)...`
+      );
+      socketRef.current.emit("process_frame", payload);
     } catch (error) {
-      console.error("Error capturing frame:", error);
+      console.error("Error capturing/sending frame:", error);
+      processingRef.current = false;
     }
   }
 
   function startFrameCapture() {
-    console.log("Starting frame capture loop...");
     isCapturingRef.current = true;
     captureFrames();
   }
 
   async function captureFrames() {
-    console.log("Frame capture loop started");
     while (isCapturingRef.current) {
       frameCountRef.current++;
 
-      // Capture every 30th frame
-      if (frameCountRef.current % 30 === 0) {
-        console.log(`Frame #${frameCountRef.current} - triggering capture`);
+      // Capture every Nth frame
+      if (frameCountRef.current % FRAME_CAPTURE_INTERVAL === 0) {
         await captureAndProcessFrame();
       }
 
-      // Wait for next frame (approximately 60 FPS = ~16ms per frame)
+      // Wait for next frame (~60 FPS = ~16ms per frame)
       await new Promise((resolve) => setTimeout(resolve, 16));
     }
-    console.log("Frame capture loop ended");
   }
 
   function toggleFacing() {
     setFacing((current) => (current === "back" ? "front" : "back"));
+    // Clear detections when switching camera
+    setBoundingBoxes([]);
   }
 
   function openSettings() {
     Linking.openSettings().catch((err) => {
-      console.warn("could not open settings", err);
+      console.warn("Could not open settings:", err);
     });
   }
 
@@ -165,6 +223,7 @@ export default function CameraPage() {
     setIsCameraReady(true);
   }
 
+  // Render permission request screens
   if (!permission) {
     return (
       <View
@@ -213,6 +272,29 @@ export default function CameraPage() {
     <View
       style={[styles.cameraContainer, { backgroundColor: colors.background }]}
     >
+      {/* Status Bar */}
+      <View
+        style={[
+          styles.statusBar,
+          { backgroundColor: colors.background + "DD" },
+        ]}
+      >
+        <View style={styles.statusRow}>
+          <View
+            style={[
+              styles.connectionIndicator,
+              { backgroundColor: isConnected ? "#00FF00" : "#FF0000" },
+            ]}
+          />
+          <Text style={[styles.statusText, { color: colors.text }]}>
+            {connectionStatus}
+          </Text>
+        </View>
+        <Text style={[styles.statusText, { color: colors.text }]}>
+          Objects: {detectionCount} | {lastProcessedTime || "Waiting..."}
+        </Text>
+      </View>
+
       <View style={styles.cameraWrapper}>
         <CameraView
           style={styles.camera}
@@ -220,7 +302,7 @@ export default function CameraPage() {
           ref={cameraRef}
           onCameraReady={handleCameraReady}
         >
-          {/* Bounding boxes overlay */}
+          {/* Render actual bounding boxes from backend */}
           {boundingBoxes.map((box, index) => (
             <View
               key={index}
@@ -234,16 +316,12 @@ export default function CameraPage() {
                 },
               ]}
             >
-              {box.label && (
-                <View style={styles.labelContainer}>
-                  <Text style={styles.labelText}>
-                    {box.label}{" "}
-                    {box.confidence
-                      ? `${Math.round(box.confidence * 100)}%`
-                      : ""}
-                  </Text>
-                </View>
-              )}
+              <View style={styles.labelContainer}>
+                <Text style={styles.labelText}>
+                  {box.label}{" "}
+                  {box.confidence ? `${Math.round(box.confidence * 100)}%` : ""}
+                </Text>
+              </View>
             </View>
           ))}
         </CameraView>
@@ -329,5 +407,29 @@ const styles = StyleSheet.create({
     color: "#000000",
     fontSize: 12,
     fontWeight: "bold",
+  },
+  statusBar: {
+    position: "absolute",
+    top: 40,
+    left: 10,
+    right: 10,
+    zIndex: 100,
+    padding: 10,
+    borderRadius: 8,
+  },
+  statusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 5,
+  },
+  connectionIndicator: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 8,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: "600",
   },
 });

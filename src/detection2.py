@@ -166,7 +166,7 @@ print("Press 'a' to toggle auto-detection mode")
 print("Press 'c' to clear detections")
 
 frame_count = 0
-auto_detect = False
+auto_detect = True
 process_every_n_frames = 40  # Process every 40 frames (~2 seconds at 20fps)
 
 try:
