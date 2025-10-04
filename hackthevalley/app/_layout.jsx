@@ -19,6 +19,7 @@ function ThemedStack() {
     >
       <Stack.Screen name='index' options={{ title: "Home" }} />
       <Stack.Screen name='camera-page' options={{ title: "Camera Page" }} />
+      <Stack.Screen name='settings-page' options={{ title: "Settings" }} />
     </Stack>
   );
 }

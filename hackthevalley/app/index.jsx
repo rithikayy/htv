@@ -1,18 +1,11 @@
 import React, { useContext } from "react";
-import { StyleSheet, Switch, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { ThemeContext } from "../contexts/ThemeContext";
 import { useRouter } from "expo-router";
 
 const HomeScreen = () => {
   const router = useRouter();
-  const {
-    highContrast,
-    dyslexiaFont,
-    toggleHighContrast,
-    toggleDyslexiaFont,
-    themeStyles,
-  } = useContext(ThemeContext);
-
+  const { themeStyles } = useContext(ThemeContext);
   const { colors, fontFamily } = themeStyles;
 
   return (
@@ -32,25 +25,23 @@ const HomeScreen = () => {
           </Text>
         </TouchableOpacity>
       </View>
-
-      <View style={styles.toggleContainer}>
-        <View style={styles.toggleRow}>
-          <Text style={[styles.label, { color: colors.text }]}>
-            High Contrast
+      <View style={styles.bottomContainer}>
+        <TouchableOpacity
+          onPress={() => router.push("/settings-page")}
+          style={[
+            styles.settingsButton,
+            { backgroundColor: colors.buttonBackground },
+          ]}
+        >
+          <Text
+            style={[
+              styles.settingsButtonText,
+              { color: colors.buttonText, fontFamily },
+            ]}
+          >
+            Settings
           </Text>
-          <View style={styles.switchContainer}>
-            <Switch value={highContrast} onValueChange={toggleHighContrast} />
-          </View>
-        </View>
-
-        <View style={styles.toggleRow}>
-          <Text style={[styles.label, { color: colors.text }]}>
-            Dyslexia Font
-          </Text>
-          <View style={styles.switchContainer}>
-            <Switch value={dyslexiaFont} onValueChange={toggleDyslexiaFont} />
-          </View>
-        </View>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -74,21 +65,17 @@ const styles = StyleSheet.create({
   buttonText: {
     fontSize: 20,
   },
-  toggleContainer: {
-    flexDirection: "row",
+  bottomContainer: {
     padding: 20,
   },
-  toggleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginVertical: 10,
+  settingsButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignSelf: "center",
   },
-  label: {
-    fontSize: 18,
-    marginRight: 10,
-  },
-  switchContainer: {
-    marginRight: 5,
+  settingsButtonText: {
+    fontSize: 16,
   },
 });
 
