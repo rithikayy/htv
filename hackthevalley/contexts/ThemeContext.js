@@ -32,10 +32,10 @@ export const ThemeProvider = ({ children }) => {
     };
     if (highContrast) {
       colors = {
-        background: "#000000",
-        text: "#ffffff",
-        buttonBackground: "#ffff00",
-        buttonText: "#000000",
+        background: "#ffffff",
+        text: "#000000",
+        buttonBackground: "#000000",
+        buttonText: "#ffffff",
       };
     }
     let fontFamily;
