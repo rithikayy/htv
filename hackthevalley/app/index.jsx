@@ -6,7 +6,7 @@ import { useRouter } from "expo-router";
 const HomeScreen = () => {
   const router = useRouter();
   const { themeStyles } = useContext(ThemeContext);
-  const { colors, fontFamily } = themeStyles;
+  const { colors, fontFamily, fontSizeMultiplier } = themeStyles;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -18,7 +18,11 @@ const HomeScreen = () => {
           <Text
             style={[
               styles.buttonText,
-              { color: colors.buttonText, fontFamily },
+              {
+                color: colors.buttonText,
+                fontFamily,
+                fontSize: Math.round(16 * fontSizeMultiplier),
+              },
             ]}
           >
             Turn on camera
@@ -36,7 +40,11 @@ const HomeScreen = () => {
           <Text
             style={[
               styles.settingsButtonText,
-              { color: colors.buttonText, fontFamily },
+              {
+                color: colors.buttonText,
+                fontFamily,
+                fontSize: Math.round(16 * fontSizeMultiplier),
+              },
             ]}
           >
             Settings

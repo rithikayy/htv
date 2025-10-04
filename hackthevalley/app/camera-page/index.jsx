@@ -1,4 +1,4 @@
-import React, { useContext, useEffect } from "react";
+import React, { useContext, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -10,12 +10,17 @@ import {
 } from "react-native";
 import { ThemeContext } from "@/contexts/ThemeContext";
 import { CameraView, CameraType, useCameraPermissions } from "expo-camera";
+import * as ImageManipulator from "expo-image-manipulator";
 
 export default function CameraPage() {
   const { themeStyles } = useContext(ThemeContext);
-  const { colors, fontFamily } = themeStyles;
+  const { colors, fontFamily, fontSizeMultiplier } = themeStyles;
   const [facing, setFacing] = React.useState("back");
   const [permission, requestPermission, getPermission] = useCameraPermissions();
+  const [isCameraReady, setIsCameraReady] = React.useState(false);
+  const cameraRef = useRef(null);
+  const frameCountRef = useRef(0);
+  const isCapturingRef = useRef(false);
 
   // Hardcoded bounding boxes for testing
   // TODO: Replace with actual data from backend API
@@ -52,7 +57,98 @@ export default function CameraPage() {
   // const [boundingBoxes, setBoundingBoxes] = React.useState([]);
   // Then update with: setBoundingBoxes(dataFromBackend);
 
-  useEffect(() => {}, [permission]);
+  useEffect(() => {
+    if (permission?.granted && isCameraReady) {
+      console.log(
+        "Camera permission granted and camera ready, starting frame capture..."
+      );
+      startFrameCapture();
+    }
+
+    return () => {
+      // Cleanup on unmount
+      console.log("Stopping frame capture...");
+      isCapturingRef.current = false;
+    };
+  }, [permission, isCameraReady]);
+
+  async function captureAndProcessFrame() {
+    if (!cameraRef.current || !isCapturingRef.current) {
+      console.log("Cannot capture: camera ref or capturing flag not ready");
+      return;
+    }
+
+    try {
+      console.log("Capturing frame...");
+      // Capture the frame
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.7,
+        skipProcessing: true,
+      });
+
+      console.log("Frame captured, processing...");
+      // Compress and resize the image
+      const manipulatedImage = await ImageManipulator.manipulateAsync(
+        photo.uri,
+        [{ resize: { width: 320 } }], // Resize to 640px width, height auto-calculated
+        {
+          compress: 0.7, // 70% quality
+          format: ImageManipulator.SaveFormat.JPEG,
+          base64: true,
+        }
+      );
+
+      // Prepare the payload that would be sent to backend
+      const payload = {
+        image: manipulatedImage.base64,
+        width: manipulatedImage.width,
+        height: manipulatedImage.height,
+        timestamp: Date.now(),
+        cameraFacing: facing,
+      };
+
+      // Log the payload (would be sent to backend in production)
+      console.log("Frame captured and processed:", {
+        timestamp: payload.timestamp,
+        width: payload.width,
+        height: payload.height,
+        cameraFacing: payload.cameraFacing,
+        base64: payload.image,
+      });
+
+      // In production, you would send to backend here:
+      // await fetch('YOUR_BACKEND_URL/process-frame', {
+      //   method: 'POST',
+      //   headers: { 'Content-Type': 'application/json' },
+      //   body: JSON.stringify(payload)
+      // });
+    } catch (error) {
+      console.error("Error capturing frame:", error);
+    }
+  }
+
+  function startFrameCapture() {
+    console.log("Starting frame capture loop...");
+    isCapturingRef.current = true;
+    captureFrames();
+  }
+
+  async function captureFrames() {
+    console.log("Frame capture loop started");
+    while (isCapturingRef.current) {
+      frameCountRef.current++;
+
+      // Capture every 30th frame
+      if (frameCountRef.current % 30 === 0) {
+        console.log(`Frame #${frameCountRef.current} - triggering capture`);
+        await captureAndProcessFrame();
+      }
+
+      // Wait for next frame (approximately 60 FPS = ~16ms per frame)
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+    console.log("Frame capture loop ended");
+  }
 
   function toggleFacing() {
     setFacing((current) => (current === "back" ? "front" : "back"));
@@ -62,6 +158,11 @@ export default function CameraPage() {
     Linking.openSettings().catch((err) => {
       console.warn("could not open settings", err);
     });
+  }
+
+  function handleCameraReady() {
+    console.log("Camera is ready!");
+    setIsCameraReady(true);
   }
 
   if (!permission) {
@@ -78,7 +179,16 @@ export default function CameraPage() {
         <View
           style={[styles.container, { backgroundColor: colors.background }]}
         >
-          <Text style={[styles.message, { color: colors.text, fontFamily }]}>
+          <Text
+            style={[
+              styles.message,
+              {
+                color: colors.text,
+                fontFamily,
+                fontSize: Math.round(16 * fontSizeMultiplier),
+              },
+            ]}
+          >
             We need your permission to show the camera
           </Text>
           <Button onPress={requestPermission} title='Grant Permission' />
@@ -104,7 +214,12 @@ export default function CameraPage() {
       style={[styles.cameraContainer, { backgroundColor: colors.background }]}
     >
       <View style={styles.cameraWrapper}>
-        <CameraView style={styles.camera} facing={facing}>
+        <CameraView
+          style={styles.camera}
+          facing={facing}
+          ref={cameraRef}
+          onCameraReady={handleCameraReady}
+        >
           {/* Bounding boxes overlay */}
           {boundingBoxes.map((box, index) => (
             <View
@@ -136,7 +251,16 @@ export default function CameraPage() {
 
       <View style={styles.buttonContainer}>
         <TouchableOpacity style={styles.button} onPress={toggleFacing}>
-          <Text style={[styles.text, { color: colors.buttonText, fontFamily }]}>
+          <Text
+            style={[
+              styles.text,
+              {
+                color: colors.buttonText,
+                fontFamily,
+                fontSize: 24 * fontSizeMultiplier,
+              },
+            ]}
+          >
             Flip Camera
           </Text>
         </TouchableOpacity>

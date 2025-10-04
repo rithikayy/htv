@@ -6,14 +6,18 @@ import React, { useContext } from "react";
 
 function ThemedStack() {
   const { themeStyles } = useContext(ThemeContext);
-  const { colors, fontFamily } = themeStyles;
+  const { colors, fontFamily, fontSizeMultiplier } = themeStyles;
 
   return (
     <Stack
       screenOptions={{
         headerStyle: { backgroundColor: colors.background },
         headerTintColor: colors.text,
-        headerTitleStyle: { color: colors.text, fontFamily },
+        headerTitleStyle: {
+          color: colors.text,
+          fontFamily,
+          fontSize: Math.round(16 * fontSizeMultiplier),
+        },
         contentStyle: { backgroundColor: colors.background },
       }}
     >

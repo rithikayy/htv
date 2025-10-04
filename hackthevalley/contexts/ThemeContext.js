@@ -3,8 +3,10 @@ import React, { createContext, useState, useMemo } from "react";
 export const ThemeContext = createContext({
   highContrast: false,
   dyslexiaFont: false,
+  fontSize: "medium",
   toggleHighContrast: () => {},
   toggleDyslexiaFont: () => {},
+  setFontSize: () => {},
   themeStyles: {
     colors: {
       background: "#ffffff",
@@ -13,12 +15,14 @@ export const ThemeContext = createContext({
       buttonText: "#ffffff",
     },
     fontFamily: undefined,
+    fontSizeMultiplier: 1,
   },
 });
 
 export const ThemeProvider = ({ children }) => {
   const [highContrast, setHighContrast] = useState(false);
   const [dyslexiaFont, setDyslexiaFont] = useState(false);
+  const [fontSize, setFontSize] = useState("medium");
 
   const toggleHighContrast = () => setHighContrast((h) => !h);
   const toggleDyslexiaFont = () => setDyslexiaFont((d) => !d);
@@ -30,6 +34,7 @@ export const ThemeProvider = ({ children }) => {
       buttonBackground: "#4CAF50",
       buttonText: "#ffffff",
     };
+
     if (highContrast) {
       colors = {
         background: "#ffffff",
@@ -38,20 +43,32 @@ export const ThemeProvider = ({ children }) => {
         buttonText: "#ffffff",
       };
     }
+
     let fontFamily;
     if (dyslexiaFont) {
       fontFamily = "DyslexiaFont";
     }
-    return { colors, fontFamily };
-  }, [highContrast, dyslexiaFont]);
+
+    // Calculate font size multiplier
+    let fontSizeMultiplier = 1;
+    if (fontSize === "small") {
+      fontSizeMultiplier = 0.95;
+    } else if (fontSize === "large") {
+      fontSizeMultiplier = 1.25;
+    }
+
+    return { colors, fontFamily, fontSizeMultiplier };
+  }, [highContrast, dyslexiaFont, fontSize]);
 
   return (
     <ThemeContext.Provider
       value={{
         highContrast,
         dyslexiaFont,
+        fontSize,
         toggleHighContrast,
         toggleDyslexiaFont,
+        setFontSize,
         themeStyles,
       }}
     >
