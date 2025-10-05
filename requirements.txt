@@ -5,3 +5,8 @@ opencv-python
 flask
 flask-socketio
 flask-cors
+elevenlabs
+eventlet
+gunicorn
+gtts
+python-dotenv

@@ -14,7 +14,7 @@ import { Audio } from "expo-av";
 import io from "socket.io-client";
 
 // Backend config
-const BACKEND_URL = "http://100.102.213.124:5000";
+const BACKEND_URL = "http://100.101.43.54:5000";
 
 export default function CameraPage() {
   const { themeStyles } = useContext(ThemeContext);
@@ -28,6 +28,8 @@ export default function CameraPage() {
   const [detectionCount, setDetectionCount] = useState(0);
   const [lastProcessedTime, setLastProcessedTime] = useState(null);
   const [distanceEnabled, setDistanceEnabled] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false); // ADD THIS LINE
+
 
   const cameraRef = useRef(null);
   const socketRef = useRef(null);
@@ -48,7 +50,7 @@ export default function CameraPage() {
       reconnectionAttempts: 10,
       reconnectionDelay: 2000,
       reconnectionDelayMax: 5000,
-      timeout: 10000,
+      timeout: 20000, // CHANGE FROM 10000 TO 20000
       autoConnect: true,
       forceNew: true,
     });
@@ -155,32 +157,58 @@ export default function CameraPage() {
 
   /** ---------------- FRAME CAPTURE ---------------- **/
   useEffect(() => {
-    if (permission?.granted && cameraRef.current && isConnected) {
-      intervalRef.current = setInterval(captureFrame, 1000); // 1 fps stable
+    // ADD cameraReady to the condition
+    if (permission?.granted && cameraRef.current && isConnected && cameraReady) {
+      console.log("🎥 Starting frame capture...");
+      intervalRef.current = setInterval(captureFrame, 1500); // Changed from 1000
+      
+      // Capture first frame immediately
+      setTimeout(captureFrame, 500);
     }
-    return () => clearInterval(intervalRef.current);
-  }, [permission, isConnected]);
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, [permission, isConnected, cameraReady]); // ADD cameraReady here
 
   async function captureFrame() {
-    if (!cameraRef.current || isProcessingRef.current) return;
-
+    if (!cameraRef.current || isProcessingRef.current || !socketRef.current?.connected) {
+      return;
+    }
+  
     const now = Date.now();
     if (now - lastFrameTimeRef.current < 1000) return;
+    
     lastFrameTimeRef.current = now;
     isProcessingRef.current = true;
-
+  
     try {
+      console.log("📸 Capturing frame...");
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
         quality: 0.5,
         skipProcessing: true,
       });
-
+  
       if (photo.base64 && socketRef.current?.connected) {
+        console.log("📤 Sending frame to backend...");
+        console.log("Base64 length:", photo.base64.length); // Debug
+
+        
+        // ADD width, height, timestamp, and data:image prefix
         socketRef.current.emit("process_frame", {
           image: photo.base64,
+          width: photo.width,    // ADD THIS
+          height: photo.height,  // ADD THIS
           cameraFacing: cameraPosition,
+          timestamp: now,        // ADD THIS
         });
+        
+        console.log("Frame sent successfully");
+      } else {
+        console.warn("⚠️ No photo data or socket disconnected");
+        isProcessingRef.current = false;
       }
     } catch (error) {
       console.error("Error capturing frame:", error);
@@ -192,6 +220,7 @@ export default function CameraPage() {
   function toggleCamera() {
     setCameraPosition((c) => (c === "back" ? "front" : "back"));
     setBoundingBoxes([]);
+    setCameraReady(false); 
   }
 
   function getBoxColor(distance) {
@@ -262,11 +291,15 @@ export default function CameraPage() {
 
       {/* Camera */}
       <View style={styles.cameraWrapper}>
-        <CameraView
-          ref={cameraRef}
-          style={styles.camera}
-          facing={cameraPosition}
-        >
+      <CameraView
+        ref={cameraRef}
+        style={styles.camera}
+        facing={cameraPosition}
+        onCameraReady={() => {  
+          console.log("📷 Camera ready!");
+          setCameraReady(true);
+        }}
+      >
           {boundingBoxes.map((box, index) => {
             const boxColor = getBoxColor(box.distance_m);
             return (
