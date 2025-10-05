@@ -4,6 +4,8 @@ from flask_cors import CORS
 from google import genai
 from google.genai import types
 from PIL import Image
+from elevenlabs.client import ElevenLabs
+from elevenlabs import stream 
 import json
 import base64
 import io
@@ -45,6 +47,12 @@ if not api_key:
     raise ValueError("GENAI_API_KEY not set in environment variables")
 
 client = genai.Client(api_key=api_key)
+
+elevenlabs_api = os.environ.get("xi-api-key")
+if not elevenlabs_api:
+    raise ValueError("xi-api-key not set in environment variables")
+
+elevenlabs = ElevenLabs(api_key=elevenlabs_api)
 
 # Try to find a working model
 MODELS_TO_TRY = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro"]
@@ -144,6 +152,51 @@ def index():
             'websocket': '/socket.io/'
         }
     })
+
+objects_said = set()
+
+def txttospeech(objects_to_be_said):
+    chunk_lst = []   
+    diff_check = False
+
+    for o in objects_to_be_said:
+        if o[0] not in objects_said:
+            diff_check = True
+            break
+
+    if diff_check:
+        for o in objects_to_be_said:
+            if o[1]:
+                s = o[0] + " " + str(o[1]) + " meters away"
+                audio_stream = elevenlabs.text_to_speech.stream(
+                    text=s,
+                    voice_id="Myn1LuZgd2qPMOg9BNtC",
+                    model_id="eleven_multilingual_v2"
+                )
+                for chunk in audio_stream:
+                    if isinstance(chunk, bytes):
+                        chunk_lst.append(chunk)
+            else:
+                audio_stream = elevenlabs.text_to_speech.stream(
+                    text=o[0],
+                    voice_id="Myn1LuZgd2qPMOg9BNtC",
+                    model_id="eleven_multilingual_v2"
+                )
+                for chunk in audio_stream:
+                    if isinstance(chunk, bytes):
+                        chunk_lst.append(chunk)
+
+    objects_said.clear()
+    for o in objects_to_be_said:
+        objects_said.add(o[0])
+
+    if chunk_lst:
+        audio_data = b''.join(chunk_lst)
+        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+        return audio_base64
+  
+    return None
+
 
 
 @app.route('/health')
@@ -291,6 +344,13 @@ def handle_frame(data):
         }
         
         logger.info(f'[{client_id}] ✓ Sending {len(detections)} detections (processed in {processing_time:.3f}s)')
+        
+        audio_base64 = None
+        if detections:  
+            objects_for_tts = [(det['label'], det.get('distance_m')) for det in detections]
+            audio_base64 = txttospeech(objects_for_tts)
+
+        result['audio'] = audio_base64
         emit('detection_result', result)
         
     except Exception as e:
