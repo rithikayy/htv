@@ -19,9 +19,13 @@
   },
   "homepage": "https://github.com/rithikayy/htv#readme",
   "dependencies": {
+<<<<<<< HEAD
     "expo": "^54.0.12",
     "expo-av": "~16.0.7",
     "expo-file-system": "~19.0.16",
+=======
+    "react-native-get-random-values": "^1.11.0",
+>>>>>>> origin/workingDemo
     "socket.io-client": "^4.8.1"
   }
 }

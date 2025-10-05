@@ -1,5 +1,6 @@
-from flask import Flask, render_template
+from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit
+from flask_cors import CORS
 from google import genai
 from google.genai import types
 from PIL import Image
@@ -10,13 +11,35 @@ import base64
 import io
 import os
 from dotenv import load_dotenv
+import logging
+import time
 
 # Load environment variables
 load_dotenv()
 
+# Configure logging with more detail
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key-here'
-socketio = SocketIO(app, cors_allowed_origins="*")
+app.config['SECRET_KEY'] = os.environ.get('GENAI_API_KEY', 'dev-secret-key-change-in-production')
+
+# Enable CORS for all origins
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Initialize Socket.IO with verbose logging
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    logger=True,
+    engineio_logger=True,
+    ping_timeout=60,
+    ping_interval=25,
+    async_mode='threading'
+)
 
 # Initialize Gemini client
 api_key = os.environ.get("GENAI_API_KEY")
@@ -35,10 +58,10 @@ elevenlabs = ElevenLabs(api_key=elevenlabs_api)
 objects_said = set()
 
 # Try to find a working model
-MODELS_TO_TRY = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
+MODELS_TO_TRY = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro"]
 ACTIVE_MODEL = None
 
-print("Testing available models...")
+logger.info("Testing available models...")
 for model in MODELS_TO_TRY:
     try:
         test_response = client.models.generate_content(
@@ -46,19 +69,20 @@ for model in MODELS_TO_TRY:
             contents="test"
         )
         ACTIVE_MODEL = model
-        print(f"Using model: {ACTIVE_MODEL}")
+        logger.info(f"✓ Using model: {ACTIVE_MODEL}")
         break
     except Exception as e:
-        print(f"{model} not available")
+        logger.warning(f"✗ {model} not available: {e}")
 
 if not ACTIVE_MODEL:
     raise ValueError("No working Gemini model found. Check your API key.")
 
-# API configuration
+# Gemini API configuration
 config = types.GenerateContentConfig(
     response_mime_type="application/json"
 )
 
+# Detection prompt
 prompt = "Detect all of the prominent items in the image. The box_2d should be [ymin, xmin, ymax, xmax] normalized to 0-1000."
 
 def txttospeech(objects_to_be_said):
@@ -107,84 +131,210 @@ def txttospeech(objects_to_be_said):
 # def index():
 #     """Serve the frontend HTML page"""
 #     return render_template('index.html')
+# Known object dimensions
+KNOWN_OBJECTS = {
+    "person": {"width_cm": 50, "height_cm": 170},
+    "laptop": {"width_cm": 35, "height_cm": 25},
+    "phone": {"width_cm": 7, "height_cm": 15},
+    "bottle": {"width_cm": 7, "height_cm": 20},
+    "cup": {"width_cm": 8, "height_cm": 10},
+    "book": {"width_cm": 15, "height_cm": 20},
+    "chair": {"width_cm": 45, "height_cm": 90},
+    "monitor": {"width_cm": 50, "height_cm": 30},
+    "keyboard": {"width_cm": 45, "height_cm": 15},
+    "mouse": {"width_cm": 6, "height_cm": 10},
+}
+
+FOCAL_LENGTH = 800
+
+
+def distance_to_camera(known_height, focal_length, pixel_height):
+    if pixel_height == 0:
+        return None
+    return (known_height * focal_length) / pixel_height
+
+
+def estimate_object_distance(norm_box, label, image_height):
+    object_info = None
+    label_lower = label.lower()
+    
+    if label_lower in KNOWN_OBJECTS:
+        object_info = KNOWN_OBJECTS[label_lower]
+    else:
+        for known_obj, dimensions in KNOWN_OBJECTS.items():
+            if known_obj in label_lower or label_lower in known_obj:
+                object_info = dimensions
+                break
+    
+    if not object_info:
+        return None
+    
+    box_height_normalized = norm_box['height']
+    pixel_height = box_height_normalized * image_height
+    
+    if pixel_height <= 0:
+        return None
+    
+    known_height_cm = object_info['height_cm']
+    distance_cm = distance_to_camera(known_height_cm, FOCAL_LENGTH, pixel_height)
+    
+    if distance_cm is None:
+        return None
+    
+    distance_m = round(distance_cm / 100, 2)
+    
+    if distance_m < 0.1 or distance_m > 100:
+        return None
+    
+    return distance_m
+
+
+# Add a simple HTTP endpoint for testing
+@app.route('/')
+def index():
+    return jsonify({
+        'status': 'running',
+        'model': ACTIVE_MODEL,
+        'message': 'Object detection server is running',
+        'endpoints': {
+            'http': '/',
+            'websocket': '/socket.io/'
+        }
+    })
+
+
+@app.route('/health')
+def health():
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': time.time(),
+        'model': ACTIVE_MODEL
+    })
 
 
 @socketio.on('connect')
 def handle_connect():
-    """Handle client connection"""
-    print('Client connected')
-    emit('connection_response', {'status': 'connected', 'model': ACTIVE_MODEL})
+    client_id = request.sid
+    logger.info(f'='*60)
+    logger.info(f'✓ NEW CLIENT CONNECTED')
+    logger.info(f'  Client ID: {client_id}')
+    logger.info(f'  Remote Address: {request.remote_addr}')
+    logger.info(f'  User Agent: {request.headers.get("User-Agent", "Unknown")}')
+    logger.info(f'='*60)
+    
+    emit('connection_status', {
+        'status': 'connected',
+        'model': ACTIVE_MODEL,
+        'message': 'Successfully connected to object detection server with distance estimation',
+        'server_time': time.time()
+    })
 
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    """Handle client disconnection"""
-    print('Client disconnected')
+    client_id = request.sid
+    logger.info(f'✗ Client disconnected: {client_id}')
 
 
 @socketio.on('process_frame')
 def handle_frame(data):
-    """
-    Receive frame from frontend, process with Gemini, send results back
+    start_time = time.time()
+    client_id = request.sid
     
-    Expected data format:
-    {
-        'image': 'base64_encoded_image_string'
-    }
-    """
     try:
-        # Get base64 image from frontend
         base64_image = data.get('image')
+        original_width = data.get('width')
+        original_height = data.get('height')
+        timestamp = data.get('timestamp')
+        camera_facing = data.get('cameraFacing', 'unknown')
         
         if not base64_image:
-            emit('error', {'message': 'No image provided'})
+            logger.error(f'[{client_id}] No image provided in payload')
+            emit('detection_error', {'error': 'No image provided'})
             return
         
-        # Remove data URI prefix if present
-        if ',' in base64_image:
-            base64_image = base64_image.split(',')[1]
+        logger.info(f'[{client_id}] Processing frame - Camera: {camera_facing}, Size: {original_width}x{original_height}')
         
-        # Decode base64 to bytes
-        image_bytes = base64.b64decode(base64_image)
+        # Decode base64
+        try:
+            if ',' in base64_image:
+                base64_image = base64_image.split(',')[1]
+            
+            image_bytes = base64.b64decode(base64_image)
+            logger.debug(f'[{client_id}] Decoded {len(image_bytes)} bytes')
+        except Exception as e:
+            logger.error(f'[{client_id}] Failed to decode base64: {e}')
+            emit('detection_error', {'error': 'Invalid base64 image'})
+            return
         
-        # Load into PIL Image using BytesIO buffer
-        image_buffer = io.BytesIO(image_bytes)
-        pil_image = Image.open(image_buffer)
-        
-        # Get image dimensions
-        width, height = pil_image.size
-        
-        print(f"Processing image: {width}x{height}")
+        # Load image
+        try:
+            image_buffer = io.BytesIO(image_bytes)
+            pil_image = Image.open(image_buffer)
+            width, height = pil_image.size
+            logger.debug(f'[{client_id}] Image size: {width}x{height}')
+        except Exception as e:
+            logger.error(f'[{client_id}] Failed to load image: {e}')
+            emit('detection_error', {'error': 'Failed to process image'})
+            return
         
         # Call Gemini API
-        response = client.models.generate_content(
-            model=ACTIVE_MODEL,
-            contents=[pil_image, prompt],
-            config=config
-        )
+        try:
+            logger.debug(f'[{client_id}] Calling Gemini API...')
+            api_start = time.time()
+            
+            response = client.models.generate_content(
+                model=ACTIVE_MODEL,
+                contents=[pil_image, prompt],
+                config=config
+            )
+            
+            api_time = time.time() - api_start
+            bounding_boxes = json.loads(response.text)
+            logger.info(f'[{client_id}] Gemini detected {len(bounding_boxes)} objects in {api_time:.2f}s')
+            
+        except Exception as e:
+            logger.error(f'[{client_id}] Gemini API error: {e}')
+            emit('detection_error', {'error': f'AI model error: {str(e)}'})
+            return
         
-        # Parse bounding boxes
-        bounding_boxes = json.loads(response.text)
-        
-        # Convert normalized coordinates to absolute
+        # Process detections
         detections = []
         for bbox in bounding_boxes:
-            abs_y1 = int(bbox["box_2d"][0]/1000 * height)
-            abs_x1 = int(bbox["box_2d"][1]/1000 * width)
-            abs_y2 = int(bbox["box_2d"][2]/1000 * height)
-            abs_x2 = int(bbox["box_2d"][3]/1000 * width)
-            
-            detections.append({
-                "label": bbox.get("label", "object"),
-                "confidence": bbox.get("confidence", 1.0),
-                "box": {
-                    "x1": abs_x1,
-                    "y1": abs_y1,
-                    "x2": abs_x2,
-                    "y2": abs_y2
-                },
-                "normalized": bbox["box_2d"]
-            })
+            try:
+                norm_y1 = bbox["box_2d"][0] / 1000.0
+                norm_x1 = bbox["box_2d"][1] / 1000.0
+                norm_y2 = bbox["box_2d"][2] / 1000.0
+                norm_x2 = bbox["box_2d"][3] / 1000.0
+                
+                norm_width = norm_x2 - norm_x1
+                norm_height = norm_y2 - norm_y1
+                
+                norm_box = {
+                    'x': norm_x1,
+                    'y': norm_y1,
+                    'width': norm_width,
+                    'height': norm_height
+                }
+                
+                label = bbox.get('label', 'object')
+                distance_m = estimate_object_distance(norm_box, label, height)
+                
+                detection = {
+                    'x': norm_x1,
+                    'y': norm_y1,
+                    'width': norm_width,
+                    'height': norm_height,
+                    'label': label,
+                    'confidence': bbox.get('confidence', 0.9),
+                    'distance_m': distance_m
+                }
+                
+                detections.append(detection)
+                
+            except (KeyError, IndexError) as e:
+                logger.warning(f'[{client_id}] Skipping malformed bbox: {e}')
+                continue
         
         print(f"Detected {len(detections)} objects")
         # GENERATE AUDIO FOR DETECTIONS
@@ -194,19 +344,78 @@ def handle_frame(data):
             objects_for_tts = [(det['label'], None) for det in detections]
             audio_base64 = txttospeech(objects_for_tts)
         # Send results back to frontend WITH AUDIO
-        emit('detection_result', {
+        processing_time = time.time() - start_time
+        
+        result = {
             'success': True,
-            'image_size': {'width': width, 'height': height},
             'detections': detections,
             'count': len(detections),
-            'audio': audio_base64  # ADD THIS LINE
-        })
+            'audio': audio_base64,  # ADD THIS LINE
+            'timestamp': timestamp,
+            'processingTime': round(processing_time, 3),
+            'distanceEnabled': True
+        }
+        
+        logger.info(f'[{client_id}] ✓ Sending {len(detections)} detections (processed in {processing_time:.3f}s)')
+        emit('detection_result', result)
         
     except Exception as e:
-        print(f"Error processing frame: {e}")
-        emit('error', {'message': str(e)})
+        logger.error(f'[{client_id}] Unexpected error: {e}', exc_info=True)
+        emit('detection_error', {'error': 'Server error occurred'})
+
+
+@socketio.on('ping')
+def handle_ping():
+    client_id = request.sid
+    logger.debug(f'[{client_id}] Received ping')
+    emit('pong', {'timestamp': time.time()})
+
+
+# Error handlers
+@socketio.on_error_default
+def default_error_handler(e):
+    logger.error(f'Socket.IO error: {e}', exc_info=True)
 
 
 if __name__ == '__main__':
     print("Starting WebSocket server on http://localhost:5001")
     socketio.run(app, debug=True, host='0.0.0.0', port=5001)
+    # Get network info
+    import socket
+    try:
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+        
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        network_ip = s.getsockname()[0]
+        s.close()
+        
+        logger.info("="*60)
+        logger.info("🚀 OBJECT DETECTION SERVER")
+        logger.info("="*60)
+        logger.info(f"📡 Listening on: http://0.0.0.0:5000")
+        logger.info(f"📱 Mobile app should use:")
+        logger.info(f"   http://{network_ip}:5000")
+        logger.info(f"📏 Distance Estimation: ENABLED")
+        logger.info(f"🤖 AI Model: {ACTIVE_MODEL}")
+        logger.info("="*60)
+        logger.info("\n🔍 Troubleshooting:")
+        logger.info(f"  1. Test HTTP: curl http://{network_ip}:5000")
+        logger.info(f"  2. Test from browser: http://{network_ip}:5000")
+        logger.info(f"  3. Check firewall allows port 5000")
+        logger.info(f"  4. Both devices on same WiFi")
+        logger.info("="*60 + "\n")
+        
+    except Exception as e:
+        logger.warning(f"Could not determine IP: {e}")
+        logger.info("Server starting on http://0.0.0.0:5000")
+    
+    # Run the server
+    socketio.run(
+        app,
+        debug=False,  # Set to False in production
+        host='0.0.0.0',
+        port=5000,
+        allow_unsafe_werkzeug=True  # For development only
+    )
