@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, request
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from google import genai
@@ -60,30 +60,135 @@ config = types.GenerateContentConfig(
 # Detection prompt
 prompt = "Detect all of the prominent items in the image. The box_2d should be [ymin, xmin, ymax, xmax] normalized to 0-1000."
 
+# ===== DISTANCE ESTIMATION CONFIGURATION =====
+# Known object dimensions (real-world measurements in cm)
+KNOWN_OBJECTS = {
+    "person": {"width_cm": 50, "height_cm": 170},
+    "laptop": {"width_cm": 35, "height_cm": 25},
+    "phone": {"width_cm": 7, "height_cm": 15},
+    "bottle": {"width_cm": 7, "height_cm": 20},
+    "cup": {"width_cm": 8, "height_cm": 10},
+    "book": {"width_cm": 15, "height_cm": 20},
+    "chair": {"width_cm": 45, "height_cm": 90},
+    "monitor": {"width_cm": 50, "height_cm": 30},
+    "keyboard": {"width_cm": 45, "height_cm": 15},
+    "mouse": {"width_cm": 6, "height_cm": 10},
+    "pen": {"width_cm": 1, "height_cm": 14},
+    "pencil": {"width_cm": 1, "height_cm": 18},
+    "mug": {"width_cm": 8, "height_cm": 10},
+    "glass": {"width_cm": 7, "height_cm": 12},
+    "watch": {"width_cm": 4, "height_cm": 4},
+    "backpack": {"width_cm": 30, "height_cm": 45},
+    "bag": {"width_cm": 35, "height_cm": 30},
+    "car": {"width_cm": 180, "height_cm": 150},
+    "bicycle": {"width_cm": 60, "height_cm": 100},
+    "dog": {"width_cm": 30, "height_cm": 60},
+    "cat": {"width_cm": 25, "height_cm": 25},
+}
+
+# Camera focal length (pixels) - This is a typical value for mobile cameras
+# You may need to calibrate this for specific devices
+FOCAL_LENGTH = 800  # Adjusted for typical mobile camera
+
+
+def distance_to_camera(known_height, focal_length, pixel_height):
+    """
+    Calculate distance to object using pinhole camera model.
+    
+    Formula: Distance = (Known Height × Focal Length) / Pixel Height
+    
+    Args:
+        known_height: Real-world height of object in cm
+        focal_length: Camera focal length in pixels
+        pixel_height: Height of object in image in pixels
+    
+    Returns:
+        Distance to object in cm
+    """
+    if pixel_height == 0:
+        return None
+    return (known_height * focal_length) / pixel_height
+
+
+def estimate_object_distance(norm_box, label, image_height):
+    """
+    Estimate distance to detected object.
+    
+    Args:
+        norm_box: Normalized bounding box coordinates (0-1)
+        label: Object label/class
+        image_height: Actual image height in pixels
+    
+    Returns:
+        Distance in meters (rounded to 2 decimal places) or None
+    """
+    # Get known dimensions for this object type
+    object_info = None
+    label_lower = label.lower()
+    
+    # Try exact match first
+    if label_lower in KNOWN_OBJECTS:
+        object_info = KNOWN_OBJECTS[label_lower]
+    else:
+        # Try partial match for compound labels (e.g., "cell phone" -> "phone")
+        for known_obj, dimensions in KNOWN_OBJECTS.items():
+            if known_obj in label_lower or label_lower in known_obj:
+                object_info = dimensions
+                logger.debug(f"Matched '{label}' to known object '{known_obj}'")
+                break
+    
+    if not object_info:
+        logger.debug(f"No known dimensions for object: {label}")
+        return None
+    
+    # Calculate pixel height of bounding box
+    box_height_normalized = norm_box['height']
+    pixel_height = box_height_normalized * image_height
+    
+    if pixel_height <= 0:
+        return None
+    
+    # Use known height for distance calculation
+    known_height_cm = object_info['height_cm']
+    distance_cm = distance_to_camera(known_height_cm, FOCAL_LENGTH, pixel_height)
+    
+    if distance_cm is None:
+        return None
+    
+    # Convert to meters and round
+    distance_m = round(distance_cm / 100, 2)
+    
+    # Sanity check - ignore unrealistic distances
+    if distance_m < 0.1 or distance_m > 100:
+        logger.debug(f"Unrealistic distance calculated for {label}: {distance_m}m")
+        return None
+    
+    return distance_m
+
 
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
-    client_id = request.sid if 'request' in globals() else 'unknown'
+    client_id = request.sid
     logger.info(f'✓ Client connected: {client_id}')
     emit('connection_status', {
         'status': 'connected',
         'model': ACTIVE_MODEL,
-        'message': 'Successfully connected to object detection server'
+        'message': 'Successfully connected to object detection server with distance estimation'
     })
 
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """Handle client disconnection"""
-    client_id = request.sid if 'request' in globals() else 'unknown'
+    client_id = request.sid
     logger.info(f'✗ Client disconnected: {client_id}')
 
 
 @socketio.on('process_frame')
 def handle_frame(data):
     """
-    Process frame from React Native app
+    Process frame from React Native app with distance estimation
     
     Expected data format:
     {
@@ -111,7 +216,7 @@ def handle_frame(data):
         
         # Decode base64 to bytes
         try:
-            # Remove data URI prefix if present (shouldn't be there based on your code, but just in case)
+            # Remove data URI prefix if present
             if ',' in base64_image:
                 base64_image = base64_image.split(',')[1]
             
@@ -126,7 +231,7 @@ def handle_frame(data):
             image_buffer = io.BytesIO(image_bytes)
             pil_image = Image.open(image_buffer)
             
-            # Get actual image dimensions (after any processing)
+            # Get actual image dimensions
             width, height = pil_image.size
             logger.info(f"Decoded image size: {width}x{height}")
             
@@ -168,17 +273,36 @@ def handle_frame(data):
                 norm_width = norm_x2 - norm_x1
                 norm_height = norm_y2 - norm_y1
                 
+                # Create normalized box for distance calculation
+                norm_box = {
+                    'x': norm_x1,
+                    'y': norm_y1,
+                    'width': norm_width,
+                    'height': norm_height
+                }
+                
+                # Get label
+                label = bbox.get('label', 'object')
+                
+                # Estimate distance to object
+                distance_m = estimate_object_distance(norm_box, label, height)
+                
                 detection = {
                     'x': norm_x1,  # Left position (0-1)
                     'y': norm_y1,  # Top position (0-1)
                     'width': norm_width,  # Width (0-1)
                     'height': norm_height,  # Height (0-1)
-                    'label': bbox.get('label', 'object'),
-                    'confidence': bbox.get('confidence', 0.9)  # Default confidence if not provided
+                    'label': label,
+                    'confidence': bbox.get('confidence', 0.9),  # Keep confidence for debugging
+                    'distance_m': distance_m  # Distance in meters (can be None)
                 }
                 
                 detections.append(detection)
-                logger.debug(f"  - {detection['label']}: x={norm_x1:.2f}, y={norm_y1:.2f}, w={norm_width:.2f}, h={norm_height:.2f}")
+                
+                if distance_m:
+                    logger.debug(f"  - {label}: {distance_m}m away")
+                else:
+                    logger.debug(f"  - {label}: distance unknown")
                 
             except (KeyError, IndexError) as e:
                 logger.warning(f"Skipping malformed bounding box: {e}")
@@ -190,7 +314,8 @@ def handle_frame(data):
             'detections': detections,
             'count': len(detections),
             'timestamp': timestamp,
-            'processingTime': None  # Could add actual processing time if needed
+            'processingTime': None,
+            'distanceEnabled': True  # Flag to indicate distance feature is active
         }
         
         logger.info(f"✓ Sending {len(detections)} detections back to client")
@@ -204,7 +329,8 @@ def handle_frame(data):
 @socketio.on('ping')
 def handle_ping():
     """Handle ping for connection testing"""
-    emit('pong', {'timestamp': os.time.time() if hasattr(os.time, 'time') else None})
+    import time
+    emit('pong', {'timestamp': time.time()})
 
 
 if __name__ == '__main__':
@@ -222,6 +348,7 @@ if __name__ == '__main__':
         
         logger.info("="*50)
         logger.info("🚀 Object Detection WebSocket Server Starting")
+        logger.info("📏 Distance Estimation: ENABLED")
         logger.info("="*50)
         logger.info(f"📡 Server will run on: http://0.0.0.0:5000")
         logger.info(f"📱 Mobile app should connect to:")

@@ -30,6 +30,7 @@ export default function CameraPage() {
   const [connectionStatus, setConnectionStatus] = useState("Connecting...");
   const [detectionCount, setDetectionCount] = useState(0);
   const [lastProcessedTime, setLastProcessedTime] = useState(null);
+  const [distanceEnabled, setDistanceEnabled] = useState(false);
 
   const cameraRef = useRef(null);
   const frameCountRef = useRef(0);
@@ -91,6 +92,20 @@ export default function CameraPage() {
         setBoundingBoxes(data.detections);
         setDetectionCount(data.count);
         setLastProcessedTime(new Date().toLocaleTimeString());
+
+        // Check if distance feature is enabled
+        if (data.distanceEnabled) {
+          setDistanceEnabled(true);
+        }
+
+        // Log distance information
+        data.detections.forEach((det) => {
+          if (det.distance_m !== null && det.distance_m !== undefined) {
+            console.log(`${det.label}: ${det.distance_m}m away`);
+          } else {
+            console.log(`${det.label}: distance unknown`);
+          }
+        });
       }
 
       processingRef.current = false; // Allow next frame to be processed
@@ -223,6 +238,23 @@ export default function CameraPage() {
     setIsCameraReady(true);
   }
 
+  // Helper function to get box color based on distance
+  function getBoxColor(distance) {
+    if (distance === null || distance === undefined) {
+      return "#808080"; // Gray for unknown distance
+    }
+    if (distance < 1.0) {
+      return "#FF0000"; // Red for very close
+    }
+    if (distance < 2.0) {
+      return "#FFA500"; // Orange for close
+    }
+    if (distance < 3.0) {
+      return "#FFFF00"; // Yellow for medium
+    }
+    return "#00FF00"; // Green for far
+  }
+
   // Render permission request screens
   if (!permission) {
     return (
@@ -293,6 +325,11 @@ export default function CameraPage() {
         <Text style={[styles.statusText, { color: colors.text }]}>
           Objects: {detectionCount} | {lastProcessedTime || "Waiting..."}
         </Text>
+        {distanceEnabled && (
+          <Text style={[styles.statusText, { color: colors.text }]}>
+            📏 Distance Estimation: ON
+          </Text>
+        )}
       </View>
 
       <View style={styles.cameraWrapper}>
@@ -303,28 +340,65 @@ export default function CameraPage() {
           onCameraReady={handleCameraReady}
         >
           {/* Render actual bounding boxes from backend */}
-          {boundingBoxes.map((box, index) => (
-            <View
-              key={index}
-              style={[
-                styles.boundingBox,
-                {
-                  left: `${box.x * 100}%`,
-                  top: `${box.y * 100}%`,
-                  width: `${box.width * 100}%`,
-                  height: `${box.height * 100}%`,
-                },
-              ]}
-            >
-              <View style={styles.labelContainer}>
-                <Text style={styles.labelText}>
-                  {box.label}{" "}
-                  {box.confidence ? `${Math.round(box.confidence * 100)}%` : ""}
-                </Text>
+          {boundingBoxes.map((box, index) => {
+            const boxColor = getBoxColor(box.distance_m);
+            return (
+              <View
+                key={index}
+                style={[
+                  styles.boundingBox,
+                  {
+                    left: `${box.x * 100}%`,
+                    top: `${box.y * 100}%`,
+                    width: `${box.width * 100}%`,
+                    height: `${box.height * 100}%`,
+                    borderColor: boxColor,
+                  },
+                ]}
+              >
+                <View
+                  style={[styles.labelContainer, { backgroundColor: boxColor }]}
+                >
+                  <Text style={styles.labelText}>
+                    {box.label}
+                    {box.distance_m !== null && box.distance_m !== undefined
+                      ? ` (${box.distance_m}m)`
+                      : ""}
+                  </Text>
+                </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
         </CameraView>
+
+        {/* Distance Legend */}
+        <View style={styles.legendContainer}>
+          <Text style={styles.legendTitle}>Distance:</Text>
+          <View style={styles.legendRow}>
+            <View
+              style={[styles.legendColor, { backgroundColor: "#FF0000" }]}
+            />
+            <Text style={styles.legendText}>&lt; 1m</Text>
+          </View>
+          <View style={styles.legendRow}>
+            <View
+              style={[styles.legendColor, { backgroundColor: "#FFA500" }]}
+            />
+            <Text style={styles.legendText}>1-2m</Text>
+          </View>
+          <View style={styles.legendRow}>
+            <View
+              style={[styles.legendColor, { backgroundColor: "#FFFF00" }]}
+            />
+            <Text style={styles.legendText}>2-3m</Text>
+          </View>
+          <View style={styles.legendRow}>
+            <View
+              style={[styles.legendColor, { backgroundColor: "#00FF00" }]}
+            />
+            <Text style={styles.legendText}>&gt; 3m</Text>
+          </View>
+        </View>
       </View>
 
       <View style={styles.buttonContainer}>
@@ -391,14 +465,12 @@ const styles = StyleSheet.create({
   boundingBox: {
     position: "absolute",
     borderWidth: 2,
-    borderColor: "#00FF00",
     backgroundColor: "transparent",
   },
   labelContainer: {
     position: "absolute",
     top: -20,
     left: 0,
-    backgroundColor: "#00FF00",
     paddingHorizontal: 4,
     paddingVertical: 2,
     borderRadius: 2,
@@ -431,5 +503,35 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 12,
     fontWeight: "600",
+  },
+  legendContainer: {
+    position: "absolute",
+    bottom: 10,
+    right: 10,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    padding: 10,
+    borderRadius: 8,
+    minWidth: 100,
+  },
+  legendTitle: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "bold",
+    marginBottom: 5,
+  },
+  legendRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 2,
+  },
+  legendColor: {
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+    marginRight: 5,
+  },
+  legendText: {
+    color: "#FFFFFF",
+    fontSize: 11,
   },
 });
