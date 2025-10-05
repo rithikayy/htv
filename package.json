@@ -17,5 +17,9 @@
   "bugs": {
     "url": "https://github.com/rithikayy/htv/issues"
   },
-  "homepage": "https://github.com/rithikayy/htv#readme"
+  "homepage": "https://github.com/rithikayy/htv#readme",
+  "dependencies": {
+    "react-native-get-random-values": "^1.11.0",
+    "socket.io-client": "^4.8.1"
+  }
 }

@@ -14,10 +14,10 @@ import { CameraView, CameraType, useCameraPermissions } from "expo-camera";
 import * as ImageManipulator from "expo-image-manipulator";
 import io from "socket.io-client";
 
-// Configuration
-const BACKEND_URL = "ws://100.102.117.223:5000";
-const FRAME_CAPTURE_INTERVAL = 30; // Capture every 30th frame
-const CONNECTION_TIMEOUT = 5000; // 5 seconds
+// Configuration - FIXED: Use HTTP instead of WS
+const BACKEND_URL = "http://100.102.213.124:5000";
+const FRAME_CAPTURE_INTERVAL = 30;
+const CONNECTION_TIMEOUT = 10000; // Increased to 10 seconds
 
 export default function CameraPage() {
   const { themeStyles } = useContext(ThemeContext);
@@ -37,46 +37,80 @@ export default function CameraPage() {
   const isCapturingRef = useRef(false);
   const socketRef = useRef(null);
   const processingRef = useRef(false);
+  const connectionAttemptRef = useRef(0);
 
   // Initialize WebSocket connection
   useEffect(() => {
-    console.log("Initializing WebSocket connection...");
+    console.log("Initializing WebSocket connection to:", BACKEND_URL);
+    connectionAttemptRef.current += 1;
 
-    // Create socket connection
+    // Create socket connection with improved configuration
     socketRef.current = io(BACKEND_URL, {
-      transports: ["websocket"],
+      transports: ["polling", "websocket"], // Try both transports
       reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 5000,
       timeout: CONNECTION_TIMEOUT,
+      autoConnect: true,
+      forceNew: true,
     });
 
     // Connection event handlers
     socketRef.current.on("connect", () => {
       console.log("✓ Connected to backend WebSocket");
+      console.log("Socket ID:", socketRef.current.id);
       setIsConnected(true);
       setConnectionStatus("Connected");
+      connectionAttemptRef.current = 0;
     });
 
     socketRef.current.on("disconnect", (reason) => {
       console.log("✗ Disconnected from backend:", reason);
       setIsConnected(false);
-      setConnectionStatus("Disconnected");
-      setBoundingBoxes([]); // Clear boxes when disconnected
+      setConnectionStatus(`Disconnected: ${reason}`);
+      setBoundingBoxes([]);
     });
 
     socketRef.current.on("connect_error", (error) => {
       console.error("Connection error:", error.message);
-      setConnectionStatus(`Connection error: ${error.message}`);
+      console.error("Error type:", error.type);
+      console.error("Error description:", error.description);
+      
+      setConnectionStatus(`Error: ${error.message}`);
+      setIsConnected(false);
 
-      // Show alert on first connection failure
-      if (!isConnected) {
+      // Show alert only on first few attempts
+      if (connectionAttemptRef.current <= 2) {
         Alert.alert(
           "Connection Error",
-          `Cannot connect to backend at ${BACKEND_URL}. Make sure:\n\n1. Backend is running (python app.py)\n2. IP address is correct\n3. Both devices are on same network`,
-          [{ text: "OK" }]
+          `Cannot connect to backend at ${BACKEND_URL}\n\nChecklist:\n• Backend running? (python app.py)\n• IP correct? ${BACKEND_URL}\n• Same WiFi network?\n• Port 5000 open?\n• Check backend terminal for errors`,
+          [
+            { text: "Retry", onPress: () => socketRef.current?.connect() },
+            { text: "Cancel", style: "cancel" }
+          ]
         );
       }
+    });
+
+    socketRef.current.on("connect_timeout", () => {
+      console.error("Connection timeout - server not responding");
+      setConnectionStatus("Timeout - server not responding");
+    });
+
+    socketRef.current.on("reconnect_attempt", (attemptNumber) => {
+      console.log(`Reconnection attempt ${attemptNumber}...`);
+      setConnectionStatus(`Reconnecting... (${attemptNumber})`);
+    });
+
+    socketRef.current.on("reconnect_failed", () => {
+      console.error("Reconnection failed after all attempts");
+      setConnectionStatus("Connection failed");
+      Alert.alert(
+        "Connection Failed",
+        "Could not connect to backend after multiple attempts. Please check your network and backend server.",
+        [{ text: "OK" }]
+      );
     });
 
     socketRef.current.on("connection_status", (data) => {
@@ -93,33 +127,42 @@ export default function CameraPage() {
         setDetectionCount(data.count);
         setLastProcessedTime(new Date().toLocaleTimeString());
 
-        // Check if distance feature is enabled
         if (data.distanceEnabled) {
           setDistanceEnabled(true);
         }
 
-        // Log distance information
         data.detections.forEach((det) => {
           if (det.distance_m !== null && det.distance_m !== undefined) {
             console.log(`${det.label}: ${det.distance_m}m away`);
-          } else {
-            console.log(`${det.label}: distance unknown`);
           }
         });
       }
 
-      processingRef.current = false; // Allow next frame to be processed
+      processingRef.current = false;
     });
 
     // Error handler
     socketRef.current.on("detection_error", (data) => {
       console.error("Detection error from backend:", data.error);
-      processingRef.current = false; // Allow retry
+      processingRef.current = false;
+    });
+
+    // Test connection with ping
+    const pingInterval = setInterval(() => {
+      if (socketRef.current?.connected) {
+        console.log("Sending ping to keep connection alive");
+        socketRef.current.emit("ping");
+      }
+    }, 30000); // Ping every 30 seconds
+
+    socketRef.current.on("pong", (data) => {
+      console.log("Received pong from server");
     });
 
     // Cleanup on unmount
     return () => {
       console.log("Cleaning up WebSocket connection...");
+      clearInterval(pingInterval);
       if (socketRef.current) {
         socketRef.current.disconnect();
         socketRef.current = null;
@@ -134,6 +177,7 @@ export default function CameraPage() {
       startFrameCapture();
     } else {
       console.log("Stopping frame capture...");
+      console.log(`  Permission: ${permission?.granted}, Camera: ${isCameraReady}, Connected: ${isConnected}`);
       isCapturingRef.current = false;
     }
 
@@ -146,33 +190,28 @@ export default function CameraPage() {
     if (
       !cameraRef.current ||
       !isCapturingRef.current ||
-      !socketRef.current ||
-      !isConnected
+      !socketRef.current?.connected
     ) {
+      console.log("Skipping frame - preconditions not met");
       return;
     }
 
-    // Skip if still processing previous frame
     if (processingRef.current) {
-      console.log("Skipping frame - still processing previous");
       return;
     }
 
     try {
       processingRef.current = true;
-      console.log("Capturing frame for detection...");
 
-      // Capture the frame
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.5, // Lower quality for faster processing
+        quality: 0.5,
         skipProcessing: true,
-        base64: true, // Get base64 directly
+        base64: true,
       });
 
-      // Resize the image for faster transmission
       const manipulatedImage = await ImageManipulator.manipulateAsync(
         photo.uri,
-        [{ resize: { width: 640 } }], // Larger size for better detection
+        [{ resize: { width: 640 } }],
         {
           compress: 0.7,
           format: ImageManipulator.SaveFormat.JPEG,
@@ -180,7 +219,6 @@ export default function CameraPage() {
         }
       );
 
-      // Prepare payload
       const payload = {
         image: manipulatedImage.base64,
         width: manipulatedImage.width,
@@ -189,13 +227,20 @@ export default function CameraPage() {
         cameraFacing: facing,
       };
 
-      // Send to backend via WebSocket
       console.log(
-        `Sending frame to backend (${(
-          manipulatedImage.base64.length / 1024
-        ).toFixed(1)}KB)...`
+        `Sending frame (${(manipulatedImage.base64.length / 1024).toFixed(1)}KB)...`
       );
+      
       socketRef.current.emit("process_frame", payload);
+
+      // Set timeout to reset processing flag if no response
+      setTimeout(() => {
+        if (processingRef.current) {
+          console.warn("Processing timeout - resetting flag");
+          processingRef.current = false;
+        }
+      }, 5000);
+
     } catch (error) {
       console.error("Error capturing/sending frame:", error);
       processingRef.current = false;
@@ -211,19 +256,16 @@ export default function CameraPage() {
     while (isCapturingRef.current) {
       frameCountRef.current++;
 
-      // Capture every Nth frame
       if (frameCountRef.current % FRAME_CAPTURE_INTERVAL === 0) {
         await captureAndProcessFrame();
       }
 
-      // Wait for next frame (~60 FPS = ~16ms per frame)
       await new Promise((resolve) => setTimeout(resolve, 16));
     }
   }
 
   function toggleFacing() {
     setFacing((current) => (current === "back" ? "front" : "back"));
-    // Clear detections when switching camera
     setBoundingBoxes([]);
   }
 
@@ -238,38 +280,33 @@ export default function CameraPage() {
     setIsCameraReady(true);
   }
 
-  // Helper function to get box color based on distance
   function getBoxColor(distance) {
     if (distance === null || distance === undefined) {
-      return "#808080"; // Gray for unknown distance
+      return "#808080";
     }
-    if (distance < 1.0) {
-      return "#FF0000"; // Red for very close
-    }
-    if (distance < 2.0) {
-      return "#FFA500"; // Orange for close
-    }
-    if (distance < 3.0) {
-      return "#FFFF00"; // Yellow for medium
-    }
-    return "#00FF00"; // Green for far
+    if (distance < 1.0) return "#FF0000";
+    if (distance < 2.0) return "#FFA500";
+    if (distance < 3.0) return "#FFFF00";
+    return "#00FF00";
   }
 
-  // Render permission request screens
+  function handleManualReconnect() {
+    console.log("Manual reconnect requested");
+    if (socketRef.current) {
+      socketRef.current.connect();
+    }
+  }
+
   if (!permission) {
     return (
-      <View
-        style={[styles.container, { backgroundColor: colors.background }]}
-      />
+      <View style={[styles.container, { backgroundColor: colors.background }]} />
     );
   }
 
   if (!permission.granted) {
     if (permission.canAskAgain) {
       return (
-        <View
-          style={[styles.container, { backgroundColor: colors.background }]}
-        >
+        <View style={[styles.container, { backgroundColor: colors.background }]}>
           <Text
             style={[
               styles.message,
@@ -282,35 +319,26 @@ export default function CameraPage() {
           >
             We need your permission to show the camera
           </Text>
-          <Button onPress={requestPermission} title='Grant Permission' />
+          <Button onPress={requestPermission} title="Grant Permission" />
         </View>
       );
     } else {
       return (
-        <View
-          style={[styles.container, { backgroundColor: colors.background }]}
-        >
+        <View style={[styles.container, { backgroundColor: colors.background }]}>
           <Text style={[styles.message, { color: colors.text, fontFamily }]}>
             Camera permission was denied. To use the camera, go to Settings and
             allow camera access.
           </Text>
-          <Button onPress={openSettings} title='Open Settings' />
+          <Button onPress={openSettings} title="Open Settings" />
         </View>
       );
     }
   }
 
   return (
-    <View
-      style={[styles.cameraContainer, { backgroundColor: colors.background }]}
-    >
+    <View style={[styles.cameraContainer, { backgroundColor: colors.background }]}>
       {/* Status Bar */}
-      <View
-        style={[
-          styles.statusBar,
-          { backgroundColor: colors.background + "DD" },
-        ]}
-      >
+      <View style={[styles.statusBar, { backgroundColor: colors.background + "DD" }]}>
         <View style={styles.statusRow}>
           <View
             style={[
@@ -321,6 +349,14 @@ export default function CameraPage() {
           <Text style={[styles.statusText, { color: colors.text }]}>
             {connectionStatus}
           </Text>
+          {!isConnected && (
+            <TouchableOpacity 
+              onPress={handleManualReconnect}
+              style={styles.reconnectButton}
+            >
+              <Text style={styles.reconnectText}>Reconnect</Text>
+            </TouchableOpacity>
+          )}
         </View>
         <Text style={[styles.statusText, { color: colors.text }]}>
           Objects: {detectionCount} | {lastProcessedTime || "Waiting..."}
@@ -339,7 +375,6 @@ export default function CameraPage() {
           ref={cameraRef}
           onCameraReady={handleCameraReady}
         >
-          {/* Render actual bounding boxes from backend */}
           {boundingBoxes.map((box, index) => {
             const boxColor = getBoxColor(box.distance_m);
             return (
@@ -356,9 +391,7 @@ export default function CameraPage() {
                   },
                 ]}
               >
-                <View
-                  style={[styles.labelContainer, { backgroundColor: boxColor }]}
-                >
+                <View style={[styles.labelContainer, { backgroundColor: boxColor }]}>
                   <Text style={styles.labelText}>
                     {box.label}
                     {box.distance_m !== null && box.distance_m !== undefined
@@ -375,27 +408,19 @@ export default function CameraPage() {
         <View style={styles.legendContainer}>
           <Text style={styles.legendTitle}>Distance:</Text>
           <View style={styles.legendRow}>
-            <View
-              style={[styles.legendColor, { backgroundColor: "#FF0000" }]}
-            />
+            <View style={[styles.legendColor, { backgroundColor: "#FF0000" }]} />
             <Text style={styles.legendText}>&lt; 1m</Text>
           </View>
           <View style={styles.legendRow}>
-            <View
-              style={[styles.legendColor, { backgroundColor: "#FFA500" }]}
-            />
+            <View style={[styles.legendColor, { backgroundColor: "#FFA500" }]} />
             <Text style={styles.legendText}>1-2m</Text>
           </View>
           <View style={styles.legendRow}>
-            <View
-              style={[styles.legendColor, { backgroundColor: "#FFFF00" }]}
-            />
+            <View style={[styles.legendColor, { backgroundColor: "#FFFF00" }]} />
             <Text style={styles.legendText}>2-3m</Text>
           </View>
           <View style={styles.legendRow}>
-            <View
-              style={[styles.legendColor, { backgroundColor: "#00FF00" }]}
-            />
+            <View style={[styles.legendColor, { backgroundColor: "#00FF00" }]} />
             <Text style={styles.legendText}>&gt; 3m</Text>
           </View>
         </View>
@@ -503,6 +528,18 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 12,
     fontWeight: "600",
+  },
+  reconnectButton: {
+    marginLeft: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: "#007AFF",
+    borderRadius: 4,
+  },
+  reconnectText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "bold",
   },
   legendContainer: {
     position: "absolute",
