@@ -25,7 +25,7 @@ def txttospeech(objects_to_be_said):
                 s = o[0] + " " + str(o[1]) + " meters away"
                 audio_stream = elevenlabs.text_to_speech.stream(
                     text=s,
-                    voice_id="TVtDNgumMv4lb9zzFzA2", # normal voice!!!
+                    voice_id="PPzYpIqttlTYA83688JI", # normal voice!!!
                     model_id="eleven_multilingual_v2"
                 )
                 for chunk in audio_stream:
@@ -34,7 +34,7 @@ def txttospeech(objects_to_be_said):
             else:
                 audio_stream = elevenlabs.text_to_speech.stream(
                     text=o[0],
-                    voice_id="TVtDNgumMv4lb9zzFzA2", # normal voice!!!
+                    voice_id="PPzYpIqttlTYA83688JI", # normal voice!!!
                     model_id="eleven_multilingual_v2"
                 )
                 for chunk in audio_stream:
