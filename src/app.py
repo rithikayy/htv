@@ -167,7 +167,7 @@ def txttospeech(objects_to_be_said):
     if diff_check:
         for o in objects_to_be_said:
             if o[1]:
-                s = o[0] + " " + str(o[1]) + " meters away"
+                s = o[0] + " " + str(o[1]) + " centimeters away"
                 audio_stream = elevenlabs.text_to_speech.stream(
                     text=s,
                     voice_id="Myn1LuZgd2qPMOg9BNtC",
@@ -343,7 +343,7 @@ def handle_frame(data):
             'distanceEnabled': True
         }
         
-        logger.info(f'[{client_id}] ✓ Sending {len(detections)} detections (processed in {processing_time:.3f}s)')
+        logger.info(f'[{client_id}] Sending {len(detections)} detections (processed in {processing_time:.3f}s)')
         
         audio_base64 = None
         if detections:  
@@ -386,13 +386,13 @@ if __name__ == '__main__':
         logger.info("="*60)
         logger.info("🚀 OBJECT DETECTION SERVER")
         logger.info("="*60)
-        logger.info(f"📡 Listening on: http://0.0.0.0:5000")
-        logger.info(f"📱 Mobile app should use:")
+        logger.info(f"Listening on: http://0.0.0.0:5000")
+        logger.info(f"Mobile app should use:")
         logger.info(f"   http://{network_ip}:5000")
-        logger.info(f"📏 Distance Estimation: ENABLED")
-        logger.info(f"🤖 AI Model: {ACTIVE_MODEL}")
+        logger.info(f"Distance Estimation: ENABLED")
+        logger.info(f"AI Model: {ACTIVE_MODEL}")
         logger.info("="*60)
-        logger.info("\n🔍 Troubleshooting:")
+        logger.info("\nTroubleshooting:")
         logger.info(f"  1. Test HTTP: curl http://{network_ip}:5000")
         logger.info(f"  2. Test from browser: http://{network_ip}:5000")
         logger.info(f"  3. Check firewall allows port 5000")
