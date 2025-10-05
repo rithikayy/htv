@@ -19,12 +19,12 @@ const SettingsScreen = () => {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={styles.toggleRow}>
+      <View style={[styles.toggleRow, { backgroundColor: colors.buttonBackground, borderRadius: 12, padding: 15, borderWidth: 2, borderColor: colors.border }]}>
         <Text
           style={[
             styles.label,
             {
-              color: colors.text,
+              color: colors.buttonText,
               fontFamily,
               fontSize: Math.round(18 * fontSizeMultiplier),
             },
@@ -32,15 +32,20 @@ const SettingsScreen = () => {
         >
           High Contrast
         </Text>
-        <Switch value={highContrast} onValueChange={toggleHighContrast} />
+        <Switch 
+          value={highContrast} 
+          onValueChange={toggleHighContrast}
+          trackColor={{ false: colors.border, true: colors.text }}
+          thumbColor={highContrast ? colors.buttonBackground : colors.background}
+        />
       </View>
 
-      <View style={styles.toggleRow}>
+      <View style={[styles.toggleRow, { backgroundColor: colors.buttonBackground, borderRadius: 12, padding: 15, borderWidth: 2, borderColor: colors.border }]}>
         <Text
           style={[
             styles.label,
             {
-              color: colors.text,
+              color: colors.buttonText,
               fontFamily,
               fontSize: Math.round(18 * fontSizeMultiplier),
             },
@@ -48,15 +53,20 @@ const SettingsScreen = () => {
         >
           Dyslexia Font
         </Text>
-        <Switch value={dyslexiaFont} onValueChange={toggleDyslexiaFont} />
+        <Switch 
+          value={dyslexiaFont} 
+          onValueChange={toggleDyslexiaFont}
+          trackColor={{ false: colors.border, true: colors.text }}
+          thumbColor={dyslexiaFont ? colors.buttonBackground : colors.background}
+        />
       </View>
 
-      <View style={styles.fontSizeSection}>
+      <View style={[styles.fontSizeSection, { backgroundColor: colors.buttonBackground, borderRadius: 12, padding: 15, borderWidth: 2, borderColor: colors.border }]}>
         <Text
           style={[
             styles.label,
             {
-              color: colors.text,
+              color: colors.buttonText,
               fontFamily,
               fontSize: Math.round(18 * fontSizeMultiplier),
             },
@@ -71,11 +81,9 @@ const SettingsScreen = () => {
               style={[
                 styles.fontSizeButton,
                 {
-                  backgroundColor:
-                    fontSize === option
-                      ? colors.buttonBackground
-                      : colors.background,
-                  borderColor: colors.text,
+                  backgroundColor: fontSize === option ? colors.text : colors.background,
+                  borderColor: colors.border,
+                  borderWidth: 2,
                 },
               ]}
               onPress={() => setFontSize(option)}
@@ -84,8 +92,7 @@ const SettingsScreen = () => {
                 style={[
                   styles.buttonText,
                   {
-                    color:
-                      fontSize === option ? colors.buttonText : colors.text,
+                    color: fontSize === option ? colors.background : colors.text,
                     fontFamily,
                     fontSize: Math.round(16 * fontSizeMultiplier),
                   },
@@ -111,14 +118,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginVertical: 10,
-    paddingVertical: 10,
   },
   label: {
     fontSize: 18,
+    fontWeight: 'bold',
   },
   fontSizeSection: {
     marginVertical: 10,
-    paddingVertical: 10,
   },
   buttonGroup: {
     flexDirection: "row",
@@ -131,7 +137,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginHorizontal: 4,
     borderRadius: 8,
-    borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
   },
